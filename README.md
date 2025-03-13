@@ -1,99 +1,109 @@
 # LLM Interaction Component
 
-This component provides a function to interact with Openrouter's API to call the Claude 3.5 Sonnet LLM model and generate responses based on user queries and predefined context.
+This component provides functionality to interact with AI language models through OpenRouter's API, primarily using Gemini and other models. It includes features for generating responses based on user queries and integrates with LangChain for additional capabilities.
 
 ## Features
 
-- Simple Python function to call Openrouter's API
-- Uses Claude 3.5 Sonnet model for high-quality responses
-- Handles errors gracefully
+- Python-based interface to call OpenRouter's API
+- Support for Google's Gemini model
+- Streaming responses for better user experience
+- LangChain integration for advanced functionality including Google Sheets access
+- Handles errors gracefully with comprehensive logging
 - Easy to integrate into any chatbot backend
-- Supports loading API key from .env file
+- Supports loading API keys from .env file
 - Interactive chat-like command-line interface
-- Passes context as system prompt for better responses
+- Dynamic data fetching when requested by the model ("NEED_DATA" pattern)
+- Warning logging to separate log files
 
 ## Requirements
 
 - Python 3.9+
-- `requests` library
-- `python-dotenv` library
+- Libraries:
+  - `openai` - For API interaction
+  - `python-dotenv` - For environment variable management
+  - `langchain` - For advanced AI agent capabilities
+  - `langchain_openai` - For OpenAI integration with LangChain
+  - `composio_langchain` - For Composio tool integration
 
 ## Installation
 
-1. Clone this repository or download the `llm_interaction.py` file.
+1. Clone this repository
 2. Install the required dependencies:
 
 ```bash
-pip install requests python-dotenv
+pip install openai python-dotenv langchain langchain_openai composio_langchain
 ```
 
-3. Set up your Openrouter API key in one of these ways:
-
-   a. Create a `.env` file in the same directory with the following content:
+3. Set up your API keys in a `.env` file in the same directory with the following content:
    ```
-   OPENROUTER_API_KEY=your_api_key_here
-   ```
-
-   b. Or set it as an environment variable:
-   ```bash
-   # For Linux/macOS
-   export OPENROUTER_API_KEY="your_api_key_here"
-
-   # For Windows (Command Prompt)
-   set OPENROUTER_API_KEY=your_api_key_here
-
-   # For Windows (PowerShell)
-   $env:OPENROUTER_API_KEY="your_api_key_here"
+   OPENROUTER_API_KEY=your_openrouter_api_key_here
+   OPENAI_API_KEY=your_openai_api_key_here
+   api_key=your_composio_api_key_here
    ```
 
 ## Usage
 
-### As a Module
+### Interactive Chat Interface
 
-```python
-from llm_interaction import get_response
-
-# Example usage
-query = "What's the price?"
-context = "What's the price?: $10\nWhat's the return policy?: 30 days"
-
-response = get_response(query, context)
-print(response)
-```
-
-### Chat Interface
-
-You can also run the script directly to use the interactive chat interface:
+You can run the script directly to use the interactive chat interface:
 
 ```bash
 python llm_interaction.py
 ```
 
-This will start a chat-like session where you can ask questions and get responses based on the predefined context. The interface uses emoji and formatting to create a more engaging chat experience. Type 'quit' to exit the program.
+This will start a chat-like session where you can ask questions and get responses. The interface uses streaming to show responses as they're generated. Type 'exit', 'quit', or 'bye' to end the conversation.
 
-## Function Details
+### Running With Initial Query
 
-The `get_response` function takes two parameters:
+You can also provide an initial query as a command-line argument:
 
-- `query` (str): The user's question or request
-- `context` (str): The context data to use for answering the query
+```bash
+python llm_interaction.py "What's the weather like today?"
+```
 
-The function passes the context as a system prompt and the query as a user message, which helps the LLM understand the information it should use to generate responses.
+### Special Commands
 
-It returns a string containing the LLM's response or an error message if something goes wrong.
+- `exit`, `quit`, `bye`: End the chat session
+- `clear`: Clear the conversation history for the current session
 
-## Error Handling
+## Key Components
 
-The function handles various error scenarios:
+### Main LLM Interaction (llm_interaction.py)
 
-- Missing API key
-- Network errors
-- API request failures
-- Unexpected response formats
+The main file handles:
+- Setting up API client configuration
+- Managing conversation history
+- Streaming responses to the console
+- Dynamic data fetching when required by the model
+- Warning and error logging
+
+### LangChain Integration (correct_langchain.py)
+
+This component provides:
+- Integration with LangChain for advanced AI capabilities
+- Ability to access Google Sheets data
+- Example implementation showing how to create and execute an agent
+
+## Advanced Features
+
+### Dynamic Data Fetching
+
+The system can detect when the model needs additional data (indicated by "NEED_DATA" in the response) and will:
+1. Pause the current response stream
+2. Fetch the required data from the LangChain component
+3. Create a new enhanced query including the data
+4. Generate a complete response incorporating the fetched data
+
+### Warning Management
+
+The system includes sophisticated warning handling that:
+- Redirects warnings to timestamped log files
+- Automatically removes empty log files
+- Prevents warnings from cluttering the console output
 
 ## Security Notes
 
-- Never hardcode your API key in the code
+- Never hardcode your API keys in the code
 - Always use environment variables or a secure secrets management system
 - Be mindful of the data you send to the LLM
 
