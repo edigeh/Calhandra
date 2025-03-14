@@ -12,6 +12,12 @@ import asyncio
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+# Define the request model for the API
+class QueryRequest(BaseModel):
+    query: str
 
 # Configure logging
 log_filename = f"warnings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -44,9 +50,26 @@ client = OpenAI(
   api_key=api_key,
 )
 
+# Initialize the FastAPI app
+app = FastAPI()
+
 # Maximum number of exchanges to keep in memory (to avoid token limits)
 # 4 means 4 pairs of messages (4 user messages + 4 assistant responses = 8 total messages)
 MAX_HISTORY_LENGTH = 3  # Reduced to optimize token usage
+
+# Define the system prompt (optimized to be more concise)
+system_prompt = """You are a helpful assistant that answers user questions in Portuguese. You have access to a table containing information about available properties, with columns: IMOVEL (property name or description), STATUS (all 'LIVRE'), ENDEREÇO (address), and DESCRIÇÃO (brief description).
+
+For questions about these properties, use the table to provide accurate information. Handle queries such as:
+
+Location-based: Filter by ENDEREÇO and list properties with their descriptions.
+Specific property: Provide the address, status, and description.
+Characteristic-based: Search DESCRIÇÃO for relevant keywords and list matching properties.
+If the user asks a question that requires information about properties, disponibility, address, or any data that would typically be found in a database or spreadsheet, respond with "NEED_DATA" at the very beginning of your message followed by your normal response.
+
+When using the table, incorporate the information naturally as if you already knew it, without mentioning its source.
+
+Use your best judgment to determine if the question can be answered with the property table or if additional data is needed based on the context and nature of the question."""
 
 # Thread pool for concurrent operations
 executor = ThreadPoolExecutor(max_workers=2)
@@ -93,6 +116,76 @@ def prefetch_data():
     except Exception as e:
         logging.error(f"Error prefetching data: {str(e)}")
         return f"Error prefetching data: {str(e)}"
+
+async def process_stream(stream, messages):
+    """Process a streaming response and return the complete message without printing"""
+    full_response = ""
+    need_data_detected = False
+    buffer = ""  # Buffer to hold potential fragments of NEED_DATA
+    
+    for chunk in stream:
+        delta = chunk.choices[0].delta
+        
+        # If there's no content in this chunk, skip
+        if not hasattr(delta, "content") or delta.content is None:
+            continue
+            
+        content = delta.content
+        full_response += content
+        
+        # Check if we need to inject data
+        if "NEED_DATA" in full_response:
+            need_data_detected = True
+            # Break the loop to fetch data
+            break
+            
+        buffer += content
+    
+    # If we detected a need for data, make a new request with the data included
+    if need_data_detected:
+        # Fetch the data
+        data = run_langchain_tool()
+        
+        # Extract the original user query from the messages
+        original_query = messages[-1]["content"]
+        
+        # Create a new message that includes both the query and the data
+        enhanced_query = f"""Original question: {original_query}
+        
+Here is the data you requested:
+{data}
+
+Please use this data to provide a complete response to the original question. DO NOT include the phrase "NEED_DATA" in your response."""
+        
+        # Make a new request with the enhanced query
+        new_messages = messages.copy()
+        new_messages[-1]["content"] = enhanced_query
+        
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            new_stream = client.chat.completions.create(
+                model="google/gemini-2.0-flash-lite-001",
+                messages=new_messages,
+                stream=True
+            )
+            
+            # Stream the new response and get the full text
+            new_full_response = ""
+            for chunk in new_stream:
+                delta = chunk.choices[0].delta
+                
+                if not hasattr(delta, "content") or delta.content is None:
+                    continue
+                    
+                content = delta.content
+                new_full_response += content
+                
+            full_response = new_full_response  # Use the new response
+    
+    # Clean up response if needed - remove any NEED_DATA that might still be present
+    full_response = full_response.replace("NEED_DATA", "").strip()
+        
+    return full_response
 
 def stream_to_console(stream, needs_data=False, data=None):
     """Process a streaming response and print tokens as they arrive"""
@@ -213,6 +306,34 @@ Please use this data to provide a complete response to the original question. DO
         
     return full_response
 
+# API endpoint for chatbot
+@app.post("/api/chatbot")
+async def chatbot(request: QueryRequest):
+    try:
+        # Create message with system prompt and user query
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request.query}
+        ]
+        
+        # Make LLM call with streaming enabled
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            stream = client.chat.completions.create(
+                model="google/gemini-2.0-flash-lite-001",
+                messages=messages,
+                stream=True
+            )
+            
+            # Process the stream and get the response
+            response = await process_stream(stream, messages)
+        
+        # Return JSON response
+        return {"response": response}
+    except Exception as e:
+        logging.error(f"API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 def main():
     # Initialize an empty in-memory conversation history for this session
     conversation_history = []
@@ -248,20 +369,6 @@ def main():
         
         # Add user's new query to history
         conversation_history = add_to_history(conversation_history, "user", user_query)
-        
-        # Define the system prompt (optimized to be more concise)
-        system_prompt = """You are a helpful assistant that answers user questions in Portuguese. You have access to a table containing information about available properties, with columns: IMOVEL (property name or description), STATUS (all 'LIVRE'), ENDEREÇO (address), and DESCRIÇÃO (brief description).
-
-For questions about these properties, use the table to provide accurate information. Handle queries such as:
-
-Location-based: Filter by ENDEREÇO and list properties with their descriptions.
-Specific property: Provide the address, status, and description.
-Characteristic-based: Search DESCRIÇÃO for relevant keywords and list matching properties.
-If the user asks a question that requires information about properties, disponibility, address, or any data that would typically be found in a database or spreadsheet, respond with "NEED_DATA" at the very beginning of your message followed by your normal response.
-
-When using the table, incorporate the information naturally as if you already knew it, without mentioning its source.
-
-Use your best judgment to determine if the question can be answered with the property table or if additional data is needed based on the context and nature of the question."""
         
         # Prepare messages with conversation history
         messages = [
@@ -299,8 +406,16 @@ Use your best judgment to determine if the question can be answered with the pro
             conversation_history = conversation_history[-(MAX_HISTORY_LENGTH * 2):]
 
 if __name__ == "__main__":
+    # Check if the user wants to run the API server
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "--api":
+        import uvicorn
+        # Get the port from the environment (for Heroku compatibility)
+        port = int(os.environ.get("PORT", 8000))
+        print(f"Starting API server on http://0.0.0.0:{port}")
+        print("Use the endpoint /api/chatbot for chatbot interactions")
+        uvicorn.run(app, host="0.0.0.0", port=port)
     # Check if the user wants to clear the conversation history
-    if len(sys.argv) > 1 and sys.argv[1].lower() == "--clear-history":
+    elif len(sys.argv) > 1 and sys.argv[1].lower() == "--clear-history":
         print("No persistent history to clear - memory is now session-specific.")
     else:
         main()
