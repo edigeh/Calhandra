@@ -10,9 +10,11 @@ import atexit
 import logging
 import asyncio
 import time
+import json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Define the request model for the API
@@ -50,8 +52,17 @@ client = OpenAI(
   api_key=api_key,
 )
 
-# Initialize the FastAPI app
+# Initialize the FastAPI app with CORS support
 app = FastAPI()
+
+# Add CORS middleware to allow cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 # Maximum number of exchanges to keep in memory (to avoid token limits)
 # 4 means 4 pairs of messages (4 user messages + 4 assistant responses = 8 total messages)
@@ -328,8 +339,15 @@ async def chatbot(request: QueryRequest):
             # Process the stream and get the response
             response = await process_stream(stream, messages)
         
-        # Return JSON response
-        return {"response": response}
+        # Create JSON response with ensure_ascii=False to properly handle non-ASCII characters
+        json_response = json.dumps({"response": response}, ensure_ascii=False)
+        
+        # Return a custom Response with the proper content type
+        return Response(
+            content=json_response,
+            media_type="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
     except Exception as e:
         logging.error(f"API error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
@@ -413,7 +431,13 @@ if __name__ == "__main__":
         port = int(os.environ.get("PORT", 8000))
         print(f"Starting API server on http://0.0.0.0:{port}")
         print("Use the endpoint /api/chatbot for chatbot interactions")
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        # Configure the uvicorn server
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=port,
+            log_level="info"
+        )
     # Check if the user wants to clear the conversation history
     elif len(sys.argv) > 1 and sys.argv[1].lower() == "--clear-history":
         print("No persistent history to clear - memory is now session-specific.")
